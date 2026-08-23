@@ -1,447 +1,310 @@
 import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
+import '../models/activity_event.dart';
 import '../utils/calendar_date_utils.dart';
 
-/// [CircularCalendar] için tüm çizim (dört halka: gün/hafta/ay/yıl,
-/// etiketler, seçim/hover vurguları) burada yapılır.
+/// AY (12) ve HAFTA (52) halkalarını çizer. Etiketler artık RADYAL:
+/// tekerlek döndükçe onunla birlikte döner, merkezden dışa doğru "dik"
+/// yazılır (enine değil uzunlamasına). Okunabilirlik için, mutlak açı
+/// alt yarıya düştüğünde 180° çevrilir ki baş aşağı durmasın.
 class CircularCalendarPainter extends CustomPainter {
   final int selectedYear;
-  final int? selectedMonth;
-  final int? selectedWeek;
-  final int? selectedDay;
-  final int? hoveredMonth;
-  final int? hoveredWeek;
-  final int? hoveredDay;
+  final int selectedMonth;
+  final int selectedWeek;
+  final double rotationAngle;
   final bool isCenterHovered;
   final int todayYear;
   final int todayMonth;
   final int todayWeek;
-  final int todayDay;
   final bool isDark;
+  final List<ActivityEvent> events;
 
   CircularCalendarPainter({
     required this.selectedYear,
     required this.selectedMonth,
     required this.selectedWeek,
-    required this.selectedDay,
-    required this.hoveredMonth,
-    required this.hoveredWeek,
-    required this.hoveredDay,
+    required this.rotationAngle,
     required this.isCenterHovered,
     required this.todayYear,
     required this.todayMonth,
     required this.todayWeek,
-    required this.todayDay,
     required this.isDark,
+    this.events = const [],
   });
+
+  static const double baseAngle = -math.pi / 2;
+
+  double _normalize(double a) {
+    double x = a % (2 * math.pi);
+    if (x < 0) x += 2 * math.pi;
+    return x;
+  }
+
+  /// Radyal dönüş: metin merkezden dışa bakar. [localMid] bu sektörün
+  /// (dönmeyen) yerel orta açısıdır; okunabilirlik kontrolü ise dönme
+  /// açısını da katan MUTLAK açıya göre yapılır, böylece tekerlek
+  /// dönerken etiket asla baş aşağı kalmaz.
+  double _radialRotation(double localMid) {
+    double rotation = localMid;
+    final double absAngle = _normalize(localMid + rotationAngle);
+    if (absAngle > math.pi / 2 && absAngle < 3 * math.pi / 2) {
+      rotation += math.pi;
+    }
+    return rotation;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final minDimension = math.min(size.width, size.height);
 
-    // Radii of concentric circles (outer to inner):
-    final r0 = minDimension * 0.48; // Outer boundary of DAYS ring
-    final r1 = minDimension * 0.40; // Outer boundary of WEEKS ring / inner boundary of days
-    final r2 = minDimension * 0.32; // Outer boundary of MONTHS ring / inner boundary of weeks
-    final r3 = minDimension * 0.11; // Center circle (YEAR) / inner boundary of months
+    final rOuter = minDimension * 0.48;
+    final rMid = minDimension * 0.34;
+    final rInner = minDimension * 0.15;
 
-    final totalDays = CalendarDateUtils.daysInYear(selectedYear);
+    Color getMonthColor(int i) => CalendarDateUtils.getMonthRingColor(i, isDark);
 
-    // Helper path generator for rings
-    Path getRingSectorPath(double innerRadius, double outerRadius, double startAngle, double sweepAngle) {
-      Path path = Path();
-      path.arcTo(Rect.fromCircle(center: center, radius: outerRadius), startAngle, sweepAngle, true);
-      path.arcTo(Rect.fromCircle(center: center, radius: innerRadius), startAngle + sweepAngle, -sweepAngle, false);
+    Path ringSector(double innerR, double outerR, double startAngle, double sweep) {
+      final path = Path();
+      path.arcTo(Rect.fromCircle(center: center, radius: outerR), startAngle, sweep, true);
+      path.arcTo(Rect.fromCircle(center: center, radius: innerR), startAngle + sweep, -sweep, false);
       path.close();
       return path;
     }
 
-    Color getMonthColor(int monthIndex) => CalendarDateUtils.getMonthRingColor(monthIndex, isDark);
-
-    int monthForDayIndex(int dayIndex) {
-      final date = DateTime(selectedYear, 1, 1).add(Duration(days: dayIndex));
-      return date.month - 1;
+    final monthCounts = List<int>.filled(12, 0);
+    final weekCounts = List<int>.filled(52, 0);
+    for (final e in events) {
+      if (e.startTime.year != selectedYear) continue;
+      monthCounts[e.startTime.month - 1]++;
+      final w = CalendarDateUtils.getWeekOfYear(e.startTime) - 1;
+      if (w >= 0 && w < 52) weekCounts[w]++;
     }
 
-    // 1. Draw OUTERMOST RING: Days of the year (between r1 and r0)
-    final double daySweep = 2 * math.pi / totalDays;
-    for (int i = 0; i < totalDays; i++) {
-      final double startAngle = math.pi / 2 + i * daySweep;
-      final monthIdx = monthForDayIndex(i);
-      final monthColor = getMonthColor(monthIdx);
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(rotationAngle);
+    canvas.translate(-center.dx, -center.dy);
 
-      final isSelected = selectedDay == i;
-      final isHovered = hoveredDay == i;
-      final isToday = todayDay == i && todayYear == selectedYear;
+    // ---- HAFTA HALKASI (dış) — artık 52'sinin TAMAMI render ediliyor ----
+    final weekSweep = 2 * math.pi / 52;
+    final weekFontSize = (minDimension * 0.016).clamp(7.0, 9.5);
 
-      final double baseOpacity = (i % 2 == 0) ? 0.20 : 0.32;
-      Color fillColor = monthColor.withOpacity(isDark ? baseOpacity : baseOpacity + 0.15);
-      if (isSelected) {
-        fillColor = monthColor.withOpacity(isDark ? 0.85 : 0.95);
-      } else if (isHovered) {
-        fillColor = monthColor.withOpacity(isDark ? 0.6 : 0.7);
-      }
+    for (int i = 0; i < 52; i++) {
+      final start = baseAngle + i * weekSweep;
+      final approxMonth = (i / 52 * 12).floor().clamp(0, 11);
+      final monthColor = getMonthColor(approxMonth);
+      final isSelected = selectedWeek == i;
+      final isToday = todayWeek == i && todayYear == selectedYear;
 
-      final sectorPath = getRingSectorPath(r1, r0, startAngle, daySweep);
+      Color fill = monthColor.withValues(alpha: isDark ? 0.22 : 0.35);
+      if (isSelected) fill = monthColor.withValues(alpha: isDark ? 0.85 : 0.95);
 
-      final sectorPaint = Paint()
-        ..color = fillColor
-        ..style = PaintingStyle.fill;
-      canvas.drawPath(sectorPath, sectorPaint);
+      final path = ringSector(rMid, rOuter, start, weekSweep);
+      canvas.drawPath(path, Paint()..color = fill..style = PaintingStyle.fill);
 
       if (isSelected) {
-        final outlinePaint = Paint()
-          ..color = isDark ? Colors.tealAccent : Colors.teal.shade700
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.0;
-        canvas.drawPath(sectorPath, outlinePaint);
+        canvas.drawPath(
+          path,
+          Paint()
+            ..color = isDark ? Colors.tealAccent : Colors.teal.shade700
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2.5,
+        );
       } else if (isToday) {
-        final todayOutline = Paint()
-          ..color = Colors.redAccent
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2;
-        canvas.drawPath(sectorPath, todayOutline);
+        canvas.drawPath(
+          path,
+          Paint()
+            ..color = Colors.redAccent
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.5,
+        );
       }
 
-      // Only draw dividers every few days to avoid visual clutter
-      if (i % 5 == 0) {
-        final dividerPaint = Paint()
+      canvas.drawLine(
+        Offset(center.dx + rMid * math.cos(start), center.dy + rMid * math.sin(start)),
+        Offset(center.dx + rOuter * math.cos(start), center.dy + rOuter * math.sin(start)),
+        Paint()
           ..color = isDark ? Colors.white10 : Colors.black12
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 0.4;
-        canvas.drawLine(
-          Offset(center.dx + r1 * math.cos(startAngle), center.dy + r1 * math.sin(startAngle)),
-          Offset(center.dx + r0 * math.cos(startAngle), center.dy + r0 * math.sin(startAngle)),
-          dividerPaint,
+          ..strokeWidth = 0.4,
+      );
+
+      // Etiket her sektörde çiziliyor — radyal (uzunlamasına), okunabilirlik
+      // korunuyor çünkü metin dönüşü sektöre değil MUTLAK açıya göre düzeltiliyor.
+      final mid = start + weekSweep / 2;
+      final midR = (rMid + rOuter) / 2;
+      final x = center.dx + midR * math.cos(mid);
+      final y = center.dy + midR * math.sin(mid);
+
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '${i + 1}',
+          style: TextStyle(
+            fontSize: weekFontSize,
+            fontWeight: isSelected || isToday ? FontWeight.bold : FontWeight.normal,
+            color: isSelected
+                ? (isDark ? Colors.black : Colors.white)
+                : isToday
+                    ? Colors.redAccent
+                    : (isDark ? Colors.white54 : Colors.black54),
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      canvas.save();
+      canvas.translate(x, y);
+      canvas.rotate(_radialRotation(mid));
+      tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+      canvas.restore();
+
+      if (weekCounts[i] > 0) {
+        final dotR = rOuter - 6;
+        canvas.drawCircle(
+          Offset(center.dx + dotR * math.cos(mid), center.dy + dotR * math.sin(mid)),
+          2.0,
+          Paint()..color = isDark ? Colors.white : Colors.black87,
         );
       }
     }
 
-    // 2. Draw WEEKS RING (between r2 and r1)
-    final double weekSweep = 2 * math.pi / 52;
-    for (int i = 0; i < 52; i++) {
-      final double startAngle = math.pi / 2 + i * weekSweep;
+    // ---- AY HALKASI ----
+    final monthSweep = 2 * math.pi / 12;
+    final months = CalendarDateUtils.monthNames;
+    final monthFontSize = (minDimension * 0.030).clamp(9.0, 14.0);
+    final monthMidRadius = (rInner + rMid) / 2;
+    final monthArcLength = 2 * monthMidRadius * math.sin(monthSweep / 2) * 0.82;
 
-      final int approxMonth = (i / 52 * 12).floor() % 12;
-      final monthColor = getMonthColor(approxMonth);
-
-      final isSelected = selectedWeek == i;
-      final isHovered = hoveredWeek == i;
-      final isToday = todayWeek == i && todayYear == selectedYear;
-
-      final double baseOpacity = (i % 2 == 0) ? 0.15 : 0.25;
-      Color fillColor = monthColor.withOpacity(isDark ? baseOpacity : baseOpacity + 0.15);
-
-      if (isSelected) {
-        fillColor = monthColor.withOpacity(isDark ? 0.8 : 0.9);
-      } else if (isHovered) {
-        fillColor = monthColor.withOpacity(isDark ? 0.6 : 0.7);
-      }
-
-      final sectorPath = getRingSectorPath(r2, r1, startAngle, weekSweep);
-
-      final sectorPaint = Paint()
-        ..color = fillColor
-        ..style = PaintingStyle.fill;
-      canvas.drawPath(sectorPath, sectorPaint);
-
-      if (isSelected) {
-        final outlinePaint = Paint()
-          ..color = isDark ? Colors.tealAccent : Colors.teal.shade700
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.5;
-        canvas.drawPath(sectorPath, outlinePaint);
-      } else if (isToday) {
-        final todayOutline = Paint()
-          ..color = Colors.redAccent
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5;
-        canvas.drawPath(sectorPath, todayOutline);
-      }
-
-      final dividerPaint = Paint()
-        ..color = isDark ? Colors.white10 : Colors.black12
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 0.5;
-      canvas.drawLine(
-        Offset(center.dx + r2 * math.cos(startAngle), center.dy + r2 * math.sin(startAngle)),
-        Offset(center.dx + r1 * math.cos(startAngle), center.dy + r1 * math.sin(startAngle)),
-        dividerPaint,
-      );
-    }
-
-    // 3. Draw MONTHS RING (between r3 and r2)
-    final double monthSweep = 2 * math.pi / 12;
     for (int i = 0; i < 12; i++) {
-      final double startAngle = math.pi / 2 + i * monthSweep;
+      final start = baseAngle + i * monthSweep;
       final monthColor = getMonthColor(i);
-
       final isSelected = selectedMonth == i;
-      final isHovered = hoveredMonth == i;
       final isToday = todayMonth == i && todayYear == selectedYear;
 
-      Color fillColor = monthColor.withOpacity(isDark ? 0.35 : 0.55);
-      if (isSelected) {
-        fillColor = monthColor.withOpacity(isDark ? 0.8 : 0.9);
-      } else if (isHovered) {
-        fillColor = monthColor.withOpacity(isDark ? 0.6 : 0.7);
-      }
+      Color fill = monthColor.withValues(alpha: isDark ? 0.4 : 0.6);
+      if (isSelected) fill = monthColor.withValues(alpha: isDark ? 0.9 : 0.95);
 
-      final sectorPath = getRingSectorPath(r3, r2, startAngle, monthSweep);
-
-      final sectorPaint = Paint()
-        ..color = fillColor
-        ..style = PaintingStyle.fill;
-      canvas.drawPath(sectorPath, sectorPaint);
+      final path = ringSector(rInner, rMid, start, monthSweep);
+      canvas.drawPath(path, Paint()..color = fill..style = PaintingStyle.fill);
 
       if (isSelected) {
-        final outlinePaint = Paint()
-          ..color = isDark ? Colors.tealAccent : Colors.teal.shade700
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 3.0;
-        canvas.drawPath(sectorPath, outlinePaint);
+        canvas.drawPath(
+          path,
+          Paint()
+            ..color = isDark ? Colors.tealAccent : Colors.teal.shade700
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 3,
+        );
       } else if (isToday) {
-        final todayOutline = Paint()
-          ..color = Colors.redAccent
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.0;
-        canvas.drawPath(sectorPath, todayOutline);
+        canvas.drawPath(
+          path,
+          Paint()
+            ..color = Colors.redAccent
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2,
+        );
       }
 
-      final dividerPaint = Paint()
-        ..color = isDark ? Colors.white10 : Colors.black12
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0;
       canvas.drawLine(
-        Offset(center.dx + r3 * math.cos(startAngle), center.dy + r3 * math.sin(startAngle)),
-        Offset(center.dx + r2 * math.cos(startAngle), center.dy + r2 * math.sin(startAngle)),
-        dividerPaint,
+        Offset(center.dx + rInner * math.cos(start), center.dy + rInner * math.sin(start)),
+        Offset(center.dx + rMid * math.cos(start), center.dy + rMid * math.sin(start)),
+        Paint()
+          ..color = isDark ? Colors.white10 : Colors.black12
+          ..strokeWidth = 1,
       );
+
+      final mid = start + monthSweep / 2;
+      final x = center.dx + monthMidRadius * math.cos(mid);
+      final y = center.dy + monthMidRadius * math.sin(mid);
+
+      // Sığması için gerekirse fontu küçült (radyal düzende uzunluk = arc değil, radyal boşluk;
+      // yine de arc uzunluğunu üst sınır olarak kullanmaya devam ediyoruz).
+      double fittedSize = monthFontSize;
+      TextPainter buildTp(double fs) => TextPainter(
+            text: TextSpan(
+              text: months[i],
+              style: TextStyle(
+                fontSize: fs,
+                fontWeight: isSelected || isToday ? FontWeight.w900 : FontWeight.w600,
+                color: isSelected
+                    ? (isDark ? Colors.black : Colors.white)
+                    : isToday
+                        ? Colors.redAccent
+                        : (isDark ? Colors.white70 : Colors.black87),
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout();
+
+      TextPainter tp = buildTp(fittedSize);
+      while (tp.width > monthArcLength && fittedSize > 6.5) {
+        fittedSize -= 0.5;
+        tp = buildTp(fittedSize);
+      }
+
+      canvas.save();
+      canvas.translate(x, y);
+      canvas.rotate(_radialRotation(mid));
+      tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+      canvas.restore();
+
+      if (monthCounts[i] > 0) {
+        final dotR = monthMidRadius + tp.height / 2 + 5;
+        canvas.drawCircle(
+          Offset(center.dx + dotR * math.cos(mid), center.dy + dotR * math.sin(mid)),
+          2.6,
+          Paint()..color = isSelected ? Colors.white : Colors.orangeAccent,
+        );
+      }
     }
 
-    // 4. Draw Concentric Circle Grid Lines
     final gridPaint = Paint()
       ..color = isDark ? Colors.white24 : Colors.black12
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
-    canvas.drawCircle(center, r0, gridPaint);
-    canvas.drawCircle(center, r1, gridPaint);
-    canvas.drawCircle(center, r2, gridPaint);
+    canvas.drawCircle(center, rOuter, gridPaint);
+    canvas.drawCircle(center, rMid, gridPaint);
 
-    // 5. Draw Center Circle (Year)
-    final centerFillPaint = Paint()
+    canvas.restore(); // dönüşü geri al — merkez + pointer sabit kalır
+
+    final centerFill = Paint()
       ..shader = RadialGradient(
         colors: isCenterHovered
             ? [Colors.teal.shade400, Colors.teal.shade700]
             : isDark
                 ? [Colors.grey.shade800, Colors.grey.shade900]
                 : [Colors.grey.shade100, Colors.grey.shade300],
-      ).createShader(Rect.fromCircle(center: center, radius: r3))
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(center, r3, centerFillPaint);
+      ).createShader(Rect.fromCircle(center: center, radius: rInner));
+    canvas.drawCircle(center, rInner, centerFill);
+    canvas.drawCircle(
+      center,
+      rInner,
+      Paint()
+        ..color = isDark ? Colors.white54 : Colors.black45
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
 
-    final circle3Border = Paint()
-      ..color = isDark ? Colors.white54 : Colors.black45
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
-    canvas.drawCircle(center, r3, circle3Border);
-
-    // 6. Draw TEXT labels
-
-    // Draw Year in the center
-    final yearTextPainter = TextPainter(
+    final yearTp = TextPainter(
       text: TextSpan(
         text: selectedYear.toString(),
         style: TextStyle(
-          color: isCenterHovered
-              ? Colors.white
-              : isDark
-                  ? Colors.tealAccent
-                  : Colors.teal.shade800,
-          fontSize: (r3 * 0.55).clamp(9.0, 24.0),
+          color: isCenterHovered ? Colors.white : (isDark ? Colors.tealAccent : Colors.teal.shade800),
+          fontSize: (rInner * 0.5).clamp(11.0, 26.0),
           fontWeight: FontWeight.w900,
         ),
       ),
       textDirection: TextDirection.ltr,
-      textAlign: TextAlign.center,
-    );
-    yearTextPainter.layout();
-    yearTextPainter.paint(
-      canvas,
-      Offset(center.dx - yearTextPainter.width / 2, center.dy - yearTextPainter.height / 2),
-    );
+    )..layout();
+    yearTp.paint(canvas, Offset(center.dx - yearTp.width / 2, center.dy - yearTp.height / 2));
 
-    // Helper to compute a "radial" rotation (labels point outward, upright on both halves)
-    double radialRotation(double midAngle) {
-      double rotationAngle = midAngle;
-      final double normAngle = (midAngle + 2 * math.pi) % (2 * math.pi);
-      if (normAngle > math.pi / 2 && normAngle < 3 * math.pi / 2) {
-        rotationAngle += math.pi;
-      }
-      return rotationAngle;
-    }
-
-    // Helper to compute a "tangential" rotation (labels run along the ring, upright on both halves)
-    double tangentialRotation(double midAngle) {
-      double rotationAngle = midAngle + math.pi / 2;
-      final double normAngle = (midAngle + 2 * math.pi) % (2 * math.pi);
-      if (normAngle > 0 && normAngle < math.pi) {
-        rotationAngle += math.pi;
-      }
-      return rotationAngle;
-    }
-
-    // Draw Month labels (tangential, in the months ring)
-    final List<String> months = CalendarDateUtils.monthNames;
-    final double monthMaxFontSize = (minDimension * 0.030).clamp(9.0, 14.0);
-    final double monthMidRadius = (r2 + r3) / 2;
-    // Available arc length (chord approximation) for a single month sector at midRadius,
-    // with a small margin so text never touches the sector's divider lines.
-    final double monthArcLength = 2 * monthMidRadius * math.sin(monthSweep / 2) * 0.86;
-
-    for (int i = 0; i < 12; i++) {
-      final double midAngle = math.pi / 2 + i * monthSweep + monthSweep / 2;
-      final double x = center.dx + monthMidRadius * math.cos(midAngle);
-      final double y = center.dy + monthMidRadius * math.sin(midAngle);
-
-      final double rotationAngle = tangentialRotation(midAngle);
-
-      final isSelected = selectedMonth == i;
-      final isToday = todayMonth == i && todayYear == selectedYear;
-
-      final Color monthTextColor = isSelected
-          ? (isDark ? Colors.black : Colors.white)
-          : isToday
-              ? Colors.redAccent
-              : isDark
-                  ? Colors.white70
-                  : Colors.black87;
-      final FontWeight monthFontWeight = isSelected || isToday ? FontWeight.bold : FontWeight.w500;
-
-      // Shrink the font until the label fits within its sector's arc length.
-      double fittedFontSize = monthMaxFontSize;
-      TextPainter labelPainter = TextPainter(
-        text: TextSpan(
-          text: months[i],
-          style: TextStyle(
-            color: monthTextColor,
-            fontSize: fittedFontSize,
-            fontWeight: monthFontWeight,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-        textAlign: TextAlign.center,
-      )..layout();
-
-      while (labelPainter.width > monthArcLength && fittedFontSize > 6.0) {
-        fittedFontSize -= 0.5;
-        labelPainter = TextPainter(
-          text: TextSpan(
-            text: months[i],
-            style: TextStyle(
-              color: monthTextColor,
-              fontSize: fittedFontSize,
-              fontWeight: monthFontWeight,
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-          textAlign: TextAlign.center,
-        )..layout();
-      }
-
-      canvas.save();
-      canvas.translate(x, y);
-      canvas.rotate(rotationAngle);
-      labelPainter.paint(canvas, Offset(-labelPainter.width / 2, -labelPainter.height / 2));
-      canvas.restore();
-    }
-
-    // Draw Week numbers (radial, in the weeks ring)
-    final double weekFontSize = (minDimension * 0.022).clamp(10.0, 14.0);
-
-    for (int i = 0; i < 52; i++) {
-      final double midAngle = math.pi / 2 + i * weekSweep + weekSweep / 2;
-      final double midRadius = (r1 + r2) / 2;
-      final double x = center.dx + midRadius * math.cos(midAngle);
-      final double y = center.dy + midRadius * math.sin(midAngle);
-
-      final double rotationAngle = radialRotation(midAngle);
-
-      final isSelected = selectedWeek == i;
-      final isToday = todayWeek == i && todayYear == selectedYear;
-
-      final textStyle = TextStyle(
-        color: isSelected
-            ? (isDark ? Colors.black : Colors.white)
-            : isToday
-                ? Colors.redAccent
-                : isDark
-                    ? Colors.white54
-                    : Colors.black54,
-        fontSize: weekFontSize,
-        fontWeight: isSelected || isToday ? FontWeight.bold : FontWeight.normal,
-      );
-
-      canvas.save();
-      canvas.translate(x, y);
-      canvas.rotate(rotationAngle);
-
-      final weekPainter = TextPainter(
-        text: TextSpan(text: '${i + 1}', style: textStyle),
-        textDirection: TextDirection.ltr,
-        textAlign: TextAlign.center,
-      );
-      weekPainter.layout();
-      weekPainter.paint(canvas, Offset(-weekPainter.width / 2, -weekPainter.height / 2));
-      canvas.restore();
-    }
-
-    // Draw Day numbers (radial, in the days ring) — only every Nth day to avoid clutter
-    final double dayFontSize = (minDimension * 0.018).clamp(9.0, 12.0);
-    // Show a label roughly every 5 days, plus always on the 1st of a visible interval
-    final int dayLabelStep = totalDays > 200 ? 5 : 3;
-
-    for (int i = 0; i < totalDays; i += dayLabelStep) {
-      final double midAngle = math.pi / 2 + i * daySweep + daySweep / 2;
-      final double midRadius = (r0 + r1) / 2;
-      final double x = center.dx + midRadius * math.cos(midAngle);
-      final double y = center.dy + midRadius * math.sin(midAngle);
-
-      final double rotationAngle = radialRotation(midAngle);
-
-      final isSelected = selectedDay == i;
-      final isToday = todayDay == i && todayYear == selectedYear;
-
-      final date = DateTime(selectedYear, 1, 1).add(Duration(days: i));
-
-      final textStyle = TextStyle(
-        color: isSelected
-            ? (isDark ? Colors.black : Colors.white)
-            : isToday
-                ? Colors.redAccent
-                : isDark
-                    ? Colors.white38
-                    : Colors.black45,
-        fontSize: dayFontSize,
-        fontWeight: isSelected || isToday ? FontWeight.bold : FontWeight.normal,
-      );
-
-      canvas.save();
-      canvas.translate(x, y);
-      canvas.rotate(rotationAngle);
-
-      final dayPainter = TextPainter(
-        text: TextSpan(text: '${date.day}', style: textStyle),
-        textDirection: TextDirection.ltr,
-        textAlign: TextAlign.center,
-      );
-      dayPainter.layout();
-      dayPainter.paint(canvas, Offset(-dayPainter.width / 2, -dayPainter.height / 2));
-      canvas.restore();
-    }
+    final pointerPath = Path()
+      ..moveTo(center.dx - 8, center.dy - rOuter - 4)
+      ..lineTo(center.dx + 8, center.dy - rOuter - 4)
+      ..lineTo(center.dx, center.dy - rOuter + 10)
+      ..close();
+    canvas.drawPath(pointerPath, Paint()..color = isDark ? Colors.tealAccent : Colors.teal.shade700);
   }
 
   @override
@@ -449,11 +312,9 @@ class CircularCalendarPainter extends CustomPainter {
     return oldDelegate.selectedYear != selectedYear ||
         oldDelegate.selectedMonth != selectedMonth ||
         oldDelegate.selectedWeek != selectedWeek ||
-        oldDelegate.selectedDay != selectedDay ||
-        oldDelegate.hoveredMonth != hoveredMonth ||
-        oldDelegate.hoveredWeek != hoveredWeek ||
-        oldDelegate.hoveredDay != hoveredDay ||
+        oldDelegate.rotationAngle != rotationAngle ||
         oldDelegate.isCenterHovered != isCenterHovered ||
-        oldDelegate.isDark != isDark;
+        oldDelegate.isDark != isDark ||
+        oldDelegate.events != events;
   }
 }

@@ -1,3 +1,4 @@
+//lib/models/season_info.dart
 import 'package:flutter/material.dart';
 
 /// Bir ayın hangi mevsime ait olduğunu ve buna dair görsel/metinsel

@@ -1,12 +1,12 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models/season_info.dart';
 
-/// Takvim ile ilgili tüm tarih hesaplamalarını tek yerde toplar.
-/// Önceden bu fonksiyonlar TakvimHomeScreen, CircularCalendar ve
-/// CircularCalendarPainter içinde ayrı ayrı kopyalanmıştı.
 class CalendarDateUtils {
-  CalendarDateUtils._(); // instantiate edilemesin
+  CalendarDateUtils._();
+
+  static const double baseAngle = -math.pi / 2; // painter/circular_calendar ile aynı sabit
 
   static bool isLeapYear(int year) {
     return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
@@ -45,37 +45,33 @@ class CalendarDateUtils {
   static int getMonthDays(int index, int year) {
     const days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     int m = index % 12;
-    if (m == 1 && isLeapYear(year)) {
-      return 29;
-    }
+    if (m == 1 && isLeapYear(year)) return 29;
     return days[m];
   }
 
   static SeasonInfo getSeasonInfo(int monthIndex) {
     switch (monthIndex) {
-      case 11: // Dec
-      case 0: // Jan
-      case 1: // Feb
+      case 11:
+      case 0:
+      case 1:
         return const SeasonInfo('Kış', Colors.blue, 'Kar ve soğuk havalar');
-      case 2: // Mar
-      case 3: // Apr
-      case 4: // May
+      case 2:
+      case 3:
+      case 4:
         return const SeasonInfo('İlkbahar', Colors.green, 'Doğanın uyanışı');
-      case 5: // Jun
-      case 6: // Jul
-      case 7: // Aug
+      case 5:
+      case 6:
+      case 7:
         return const SeasonInfo('Yaz', Colors.orange, 'Sıcak tatil günleri');
-      case 8: // Sep
-      case 9: // Oct
-      case 10: // Nov
+      case 8:
+      case 9:
+      case 10:
         return const SeasonInfo('Sonbahar', Colors.brown, 'Hüzünlü güz ve dökülen yapraklar');
       default:
         return const SeasonInfo('Bilinmeyen', Colors.grey, '');
     }
   }
 
-  /// [CircularCalendarPainter] içindeki ay renkleri, [getSeasonInfo] ile aynı
-  /// mevsim eşlemesini kullanır ama koyu/açık tema için farklı ton döner.
   static Color getMonthRingColor(int monthIndex, bool isDark) {
     switch (monthIndex) {
       case 11:
@@ -108,9 +104,7 @@ class CalendarDateUtils {
   static List<int> getWeeksForMonth(int monthIndex, int year) {
     List<int> weeks = [];
     for (int w = 0; w < 52; w++) {
-      if (getMonthForWeek(w, year) == monthIndex) {
-        weeks.add(w);
-      }
+      if (getMonthForWeek(w, year) == monthIndex) weeks.add(w);
     }
     return weeks;
   }
@@ -119,16 +113,31 @@ class CalendarDateUtils {
     final firstDayOfYear = DateTime(year, 1, 1);
     final startOfWeek = firstDayOfYear.add(Duration(days: weekIndex * 7));
     final endOfWeek = startOfWeek.add(const Duration(days: 6));
-
     final startDay = startOfWeek.day;
     final startMonth = monthNamesShort[startOfWeek.month - 1];
     final endDay = endOfWeek.day;
     final endMonth = monthNamesShort[endOfWeek.month - 1];
-
     if (startOfWeek.month == endOfWeek.month) {
       return '$startDay - $endDay $startMonth $year';
     } else {
       return '$startDay $startMonth - $endDay $endMonth $year';
     }
+  }
+
+  /// Verilen dönüş açısında (radyan), tekerleğin SAĞ yarımında (ekranın
+  /// sağ yarısında, x>0 tarafında) hangi ayların sektörü düşüyorsa onları
+  /// döner. Painter'daki baseAngle ile aynı referans kullanılıyor.
+  static List<int> monthsInRightHalf(double rotationAngle) {
+    const monthSweep = 2 * math.pi / 12;
+    final result = <int>[];
+    for (int i = 0; i < 12; i++) {
+      final mid = baseAngle + i * monthSweep + monthSweep / 2 + rotationAngle;
+      double norm = mid % (2 * math.pi);
+      if (norm < 0) norm += 2 * math.pi;
+      if (norm < math.pi / 2 || norm > 3 * math.pi / 2) {
+        result.add(i);
+      }
+    }
+    return result;
   }
 }
